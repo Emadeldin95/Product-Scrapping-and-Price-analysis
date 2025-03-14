@@ -18,7 +18,7 @@ app.layout = create_layout()
 scraper = None
 scraper_thread = None
 data_store = []  # Holds scraped data
-scraping_status = "Stopped"  # Status tracker
+scraping_status = "Stopped"
 
 def run_scraper(url, keywords):
     """Runs the scraper in a separate thread."""
@@ -44,16 +44,18 @@ def update_callback(data):
     State("keyword-input", "value"),
     prevent_initial_call=True
 )
-def handle_scraper_and_update_table(n_intervals, start, stop, url, keywords):
+def control_scraping_and_update_table(n_intervals, start, stop, url, keywords):
     """Manages the scraping process, updates the table, live status indicator, and product counter."""
     global scraper, scraper_thread, scraping_status
 
     triggered_id = ctx.triggered_id
 
     if triggered_id == "start-btn" and url:
-        scraper_thread = threading.Thread(target=run_scraper, args=(url, keywords))
-        scraper_thread.start()
-    
+        if not scraper_thread or not scraper_thread.is_alive():
+            scraper_thread = threading.Thread(target=run_scraper, args=(url, keywords), daemon=True)
+            scraper_thread.start()
+            scraping_status = "Active"
+
     elif triggered_id == "stop-btn" and scraper:
         scraper.stop()
         scraping_status = "Stopped"
@@ -77,52 +79,52 @@ def download_data(n_clicks):
 
 @app.callback(
     Output("analytics-content", "children"),
-    Input("tabs", "value")
+    Input("analytics-interval", "n_intervals"),
+    prevent_initial_call=True
 )
-def update_analytics(tab):
-    """Updates the analytics tab with visualizations based on scraped data."""
-    if tab == "analytics" and data_store:
-        df = pd.DataFrame(data_store)
+def update_analytics(n_intervals):
+    """Updates the analytics tab dynamically."""
+    if not data_store:
+        return html.Div("No data available yet.", style={"textAlign": "center", "color": "red"})
 
-        # Convert prices to numbers
-        df["Price"] = df["Price"].str.replace(",", "", regex=True).str.extract(r"(\d+)").astype(float)
+    df = pd.DataFrame(data_store)
 
-        # Check if we have valid price data
-        if df["Price"].dropna().empty:
-            return html.Div("No price data available for analytics.", style={"textAlign": "center", "color": "red"})
+    # Convert prices to numbers
+    df["Price"] = df["Price"].str.replace(",", "", regex=True).str.extract(r"(\d+)").astype(float)
 
-        # Summary statistics
-        lowest_price = df["Price"].min()
-        highest_price = df["Price"].max()
-        avg_price = df["Price"].mean()
-        median_price = df["Price"].median()
+    if df["Price"].dropna().empty:
+        return html.Div("No price data available for analytics.", style={"textAlign": "center", "color": "red"})
 
-        # Price Distribution Histogram
-        price_hist = px.histogram(df, x="Price", nbins=20, title="Price Distribution")
+    # Summary statistics
+    lowest_price = df["Price"].min()
+    highest_price = df["Price"].max()
+    avg_price = df["Price"].mean()
+    median_price = df["Price"].median()
 
-        # Box Plot to show price variations
-        box_plot = px.box(df, y="Price", title="Price Variability")
+    # Price Distribution Histogram
+    price_hist = px.histogram(df, x="Price", nbins=20, title="Price Distribution")
 
-        # Price Summary
-        summary_table = dash_table.DataTable(
-            columns=[{"name": "Statistic", "id": "stat"}, {"name": "Value", "id": "value"}],
-            data=[
-                {"stat": "Lowest Price", "value": f"{lowest_price} EGP"},
-                {"stat": "Highest Price", "value": f"{highest_price} EGP"},
-                {"stat": "Average Price", "value": f"{avg_price:.2f} EGP"},
-                {"stat": "Median Price", "value": f"{median_price} EGP"}
-            ],
-            style_table={"marginTop": "20px"}
-        )
+    # Box Plot to show price variations
+    box_plot = px.box(df, y="Price", title="Price Variability")
 
-        return html.Div([
-            html.H4("Price Analytics", style={"textAlign": "center", "marginBottom": "20px"}),
-            dcc.Graph(figure=price_hist),
-            dcc.Graph(figure=box_plot),
-            summary_table
-        ])
-    
-    return ""
+    # Summary Table
+    summary_table = dash_table.DataTable(
+        columns=[{"name": "Statistic", "id": "stat"}, {"name": "Value", "id": "value"}],
+        data=[
+            {"stat": "Lowest Price", "value": f"{lowest_price} EGP"},
+            {"stat": "Highest Price", "value": f"{highest_price} EGP"},
+            {"stat": "Average Price", "value": f"{avg_price:.2f} EGP"},
+            {"stat": "Median Price", "value": f"{median_price} EGP"}
+        ],
+        style_table={"marginTop": "20px"}
+    )
+
+    return html.Div([
+        html.H4("Price Analytics", style={"textAlign": "center", "marginBottom": "20px"}),
+        dcc.Graph(figure=price_hist),
+        dcc.Graph(figure=box_plot),
+        summary_table
+    ])
 
 @app.callback(
     Output("tabs-content", "children"),
@@ -131,29 +133,34 @@ def update_analytics(tab):
 def update_tabs(selected_tab):
     """Handles switching between Data Table and Analytics."""
     if selected_tab == "table":
-        return dash_table.DataTable(
-            id="data-table",
-            columns=[
-                {"name": "Name", "id": "Name", "presentation": "markdown"},
-                {"name": "Price", "id": "Price"},
-                {"name": "Link", "id": "Link", "presentation": "markdown"}
-            ],
-            data=[],
-            page_size=10,
-            style_table={'overflowX': 'auto'},
-            style_cell={'textAlign': 'left', 'padding': '10px'},
-            style_data_conditional=[
-                {
-                    'if': {'column_id': 'Name'},
-                    'maxWidth': '50%',  # Limit "Name" column to 50% of table width
-                    'whiteSpace': 'normal',
-                    'overflow': 'hidden',
-                    'textOverflow': 'ellipsis'
-                }
-            ]
-        )
+        return html.Div([
+            dash_table.DataTable(
+                id="data-table",
+                columns=[
+                    {"name": "Name", "id": "Name", "presentation": "markdown"},
+                    {"name": "Price", "id": "Price"},
+                    {"name": "Link", "id": "Link", "presentation": "markdown"}
+                ],
+                data=[],
+                page_size=10,
+                style_table={'overflowX': 'auto'},
+                style_cell={'textAlign': 'left', 'padding': '10px'},
+                style_data_conditional=[
+                    {
+                        'if': {'column_id': 'Name'},
+                        'maxWidth': '50%',
+                        'whiteSpace': 'normal',
+                        'overflow': 'hidden',
+                        'textOverflow': 'ellipsis'
+                    }
+                ]
+            )
+        ])
     elif selected_tab == "analytics":
-        return html.Div(id="analytics-content")
+        return html.Div([
+            html.Div(id="analytics-content"),
+            dcc.Interval(id="analytics-interval", interval=3000, n_intervals=0)  # Update analytics every 3s
+        ])
 
 if __name__ == "__main__":
     app.run_server(debug=True)
